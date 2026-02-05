@@ -19,6 +19,7 @@ Non-trivial decisions:
 """
 
 import os
+import re
 import fitz
 import pdfplumber
 from docx import Document
@@ -48,12 +49,15 @@ def get_document_name(path: str, doc_content: Dict) -> str:
     
     if doc_content.get('full_text'):
         lines = doc_content['full_text'].strip().split('\n')
-        for line in lines[:5]:  # Check first 5 lines
+        for line in lines[:10]:  # Check first 10 lines for better title detection
             clean_line = line.strip()
-            if clean_line and len(clean_line) > 3 and len(clean_line) < 100:
-                if not clean_line.lower().startswith(('page ', 'chapter ', 'section ')):
-                    print(f"[DEBUG] Using content-based title: {clean_line}")
-                    return clean_line
+            # Skip page markers, empty lines, and very short/long lines
+            if (clean_line and len(clean_line) > 3 and len(clean_line) < 200 and
+                not clean_line.lower().startswith(('page ', 'chapter ', 'section ')) and
+                not clean_line.startswith('[PAGE') and  # Skip [PAGE n] markers
+                not re.match(r'^\[PAGE\s+\d+\]', clean_line, re.IGNORECASE)):  # Skip page markers
+                print(f"[DEBUG] Using content-based title: {clean_line}")
+                return clean_line
     
     print(f"[DEBUG] Using filename-based title: {base_name}")
     return base_name

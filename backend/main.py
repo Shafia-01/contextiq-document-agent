@@ -33,7 +33,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-UPLOAD_DIR = Path("data/uploads")
+# Resolve the uploads directory relative to this file so uploads work
+# even if uvicorn is started from a different working directory.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+UPLOAD_DIR = PROJECT_ROOT / "data" / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 vectorstore = InMemoryVectorStore()

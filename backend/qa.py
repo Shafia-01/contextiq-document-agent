@@ -258,6 +258,11 @@ class QAEngine:
 
         scores = [c["score"] for chunks in grouped_chunks.values() for c in chunks]
         confidence = self._compute_confidence(scores)
+        
+        # Log confidence to console (not shown in UI per user request)
+        print(f"[QA] Confidence: {confidence.get('label', 'unknown')} "
+              f"(max≈{confidence.get('max_score', 0.0):.3f}, "
+              f"avg≈{confidence.get('avg_score', 0.0):.3f})")
 
         is_combined = any(
             keyword in query.lower() for keyword in ["these papers", "all papers", "combined", "together"]

@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import time
+import re
 
 st.set_page_config(
     page_title="ContextIQ",
@@ -107,6 +108,36 @@ def display_arxiv_papers(papers):
             st.write(f"**PDF URL:** {paper['pdf_url']}")
 
 
+def _paper_label(document_name: str | None, source_name: str | None) -> str:
+    """
+    Map a document to a stable, human-friendly label.
+
+    - If the document corresponds to one of the uploaded files in this
+      Streamlit session, we label it as "Paper N: <title or filename>" where
+      N is the 1-based upload order.
+    - Otherwise we fall back to the best available name.
+    - Filters out page markers like "[PAGE 1]" from document names.
+    """
+    import re
+    
+    base_name = document_name or source_name or "Unknown document"
+    
+    # Remove page markers like "[PAGE 1]" that might have been incorrectly
+    # extracted as part of the document title
+    base_name = re.sub(r'\[PAGE\s+\d+\]\s*', '', base_name, flags=re.IGNORECASE).strip()
+    
+    # If after cleaning we have nothing meaningful, fall back to source_name
+    if not base_name or base_name == "[PAGE":
+        base_name = source_name or "Unknown document"
+
+    uploaded = st.session_state.get("uploaded_files", [])
+    for idx, f in enumerate(uploaded):
+        if source_name and f.get("name") == source_name:
+            return f"Paper {idx + 1}: {base_name}"
+
+    return base_name
+
+
 def _format_answer_for_display(answer_payload: dict) -> str:
     """
     Turn the structured answer payload from the backend into a readable
@@ -128,14 +159,15 @@ def _format_answer_for_display(answer_payload: dict) -> str:
 
     lines = []
 
-    # Confidence section (lightweight sanity check)
-    label = confidence.get("label")
-    if label:
-        max_score = confidence.get("max_score", 0.0)
-        avg_score = confidence.get("avg_score", 0.0)
-        lines.append(f"**Confidence:** {label} "
-                     f"(max similarity≈{max_score:.2f}, avg≈{avg_score:.2f})")
-        lines.append("")
+    # Confidence is logged in backend console, not shown in UI per user request
+
+    # Build a lookup from document name to source metadata so we can attach
+    # "Paper N" labels consistently in both answers and sources.
+    source_index = {}
+    for src in sources:
+        key = src.get("document_name") or src.get("source_name")
+        if key:
+            source_index[key] = src
 
     if mode == "combined":
         lines.append("**Answer (combined across documents):**")
@@ -144,7 +176,12 @@ def _format_answer_for_display(answer_payload: dict) -> str:
         lines.append("**Answers by document:**")
         answers = answer_payload.get("answers", {})
         for doc_id, text in answers.items():
-            lines.append(f"- **{doc_id}**")
+            src = source_index.get(doc_id)
+            label = _paper_label(
+                (src or {}).get("document_name") if src else doc_id,
+                (src or {}).get("source_name") if src else None,
+            )
+            lines.append(f"- **{label}**")
             lines.append(f"  {text}")
     else:
         lines.append(answer_payload.get("answer", "No answer available."))
@@ -154,7 +191,7 @@ def _format_answer_for_display(answer_payload: dict) -> str:
         lines.append("")
         lines.append("**Sources used (documents & pages):**")
         for src in sources:
-            name = src.get("document_name") or src.get("source_name") or "Unknown document"
+            name = _paper_label(src.get("document_name"), src.get("source_name"))
             pages = src.get("pages") or []
             page_str = f"pages {', '.join(str(p) for p in pages)}" if pages else "page information unavailable"
             lines.append(f"- {name} – {page_str}")
@@ -166,6 +203,29 @@ def _format_answer_for_display(answer_payload: dict) -> str:
         )
 
     return "\n".join(lines)
+
+
+def _rewrite_query_with_paper_indices(query: str) -> str:
+    """
+    Interpret 'paper 1', 'paper 2', ... as references to the uploaded
+    documents in order, and rewrite the query to use the actual filenames.
+
+    Example:
+        'What is the conclusion of paper 1?' ->
+        'What is the conclusion of 2509.09680v1.pdf?'
+    """
+    uploaded = st.session_state.get("uploaded_files", [])
+    if not uploaded:
+        return query
+
+    def replacer(match: re.Match) -> str:
+        idx = int(match.group(1)) - 1
+        if 0 <= idx < len(uploaded):
+            filename = uploaded[idx].get("name", f"paper {match.group(1)}")
+            return filename
+        return match.group(0)
+
+    return re.sub(r"paper\s+(\d+)", replacer, query, flags=re.IGNORECASE)
 
 
 def main():
@@ -455,13 +515,15 @@ def main():
             st.error("**❌ Please upload documents or search/ingest ArXiv papers first to ask questions**")
             return
         
+        rewritten_query = _rewrite_query_with_paper_indices(query)
+
         st.session_state.messages.append({
             "role": "user",
             "content": query,
             "timestamp": time.time()
         })
         
-        success, result = ask_question(query, model)
+        success, result = ask_question(rewritten_query, model)
         
         if success:
             # The backend returns a structured answer payload under "answer".
