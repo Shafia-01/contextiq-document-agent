@@ -41,36 +41,107 @@ class LLMInterface:
 
 class GeminiModel(LLMInterface):
     """
-    Gemini-backed implementation of the LLM interface.
+    Gemini-backed implementation of the LLM interface with automatic fallback
+    for rate limit handling.
 
     We deliberately keep **embeddings local** (SentenceTransformers) so that
     retrieval behaves the same regardless of whether the generator is Gemini
     or Groq. Gemini is only responsible for turning retrieved context into
     natural-language answers.
 
-    Note: The default model id here is set to ``gemini-2.5-flash``, which
-    matches the current Gemini Developer API naming. If your account exposes
-    a different model (e.g. ``gemini-3.0-flash``), you can change this string
-    or introduce an environment variable to override it.
+    This implementation automatically falls back to alternative Gemini models
+    if the primary model hits rate limits, ensuring the API doesn't crash mid-run.
     """
 
-    def __init__(self, llm_model: str = "gemini-2.5-flash"):
+    # Ordered list of Gemini models to try (aligned with Google AI Studio Usage and Limits).
+    # When one hits rate limits, we automatically try the next. Order: try preferred first,
+    # then models with separate quotas (Flash Lite, 3 Flash), then older Gemini/Gemma.
+    FALLBACK_MODELS = [
+        "gemini-2.5-flash",        # Primary (may hit 21/20 limit)
+        "gemini-2.5-flash-lite",   # Separate quota (0/10 in your dashboard)
+        "gemini-3-flash",          # Separate quota (0/5)
+        "gemini-pro",
+        "gemma-3-12b-001",         # Gemma 3 12B (0/30)
+        "gemma-3-4b-001",          # Gemma 3 4B (0/30)
+        "gemma-3-2b-001",          # Gemma 3 2B (0/30)
+        "gemma-3-1b-001",          # Gemma 3 1B (0/30)
+    ]
+
+    def __init__(self, llm_model: str = None):
         # Use the modern google-genai client wired via llm_client.
         self.client = get_llm_client("gemini")
-        self.llm_model = llm_model
+        # Use provided model or default to first in fallback list
+        self.llm_model = llm_model or self.FALLBACK_MODELS[0]
+        # Track which model index we're currently using (0 if not in list)
+        try:
+            self._current_model_index = self.FALLBACK_MODELS.index(self.llm_model)
+        except ValueError:
+            self._current_model_index = 0
 
     def get_embeddings(self, text_list: List[str]) -> List[List[float]]:
         # Shared local embedding model for all providers; this keeps retrieval
         # deterministic and avoids coupling to provider-specific embedding APIs.
         return [embed_model.encode(t).tolist() for t in text_list]
 
-    def generate_text(self, prompt: str, system_prompt: str = "") -> str:
-        content = f"{system_prompt or 'You are a helpful assistant.'}\n\n{prompt}"
-        resp = self.client.models.generate_content(
-            model=self.llm_model,
-            contents=content,
+    def _is_rate_limit_error(self, error: Exception) -> bool:
+        """Check if an error is a rate limit or quota exceeded error."""
+        error_str = str(error).lower()
+        error_type = type(error).__name__
+        return (
+            "rate limit" in error_str or
+            "quota" in error_str or
+            "429" in error_str or
+            "resource_exhausted" in error_str or
+            "RESOURCE_EXHAUSTED" in error_type
         )
-        return resp.text
+
+    def generate_text(self, prompt: str, system_prompt: str = "") -> str:
+        """
+        Generate text with automatic fallback to alternative models on rate limits.
+        
+        If the current model hits a rate limit, we automatically try the next
+        available model in the fallback list. This prevents crashes mid-run.
+        """
+        content = f"{system_prompt or 'You are a helpful assistant.'}\n\n{prompt}"
+        
+        # Try models in order, starting from current index
+        last_error = None
+        for i in range(self._current_model_index, len(self.FALLBACK_MODELS)):
+            model_to_try = self.FALLBACK_MODELS[i]
+            try:
+                print(f"[Gemini] Attempting model: {model_to_try}")
+                resp = self.client.models.generate_content(
+                    model=model_to_try,
+                    contents=content,
+                )
+                # Success - update current model index for next call
+                if i != self._current_model_index:
+                    print(f"[Gemini] Switched to model: {model_to_try} (was using {self.FALLBACK_MODELS[self._current_model_index]})")
+                    self._current_model_index = i
+                    self.llm_model = model_to_try
+                return resp.text
+            except Exception as e:
+                last_error = e
+                if self._is_rate_limit_error(e):
+                    print(f"[Gemini] Rate limit on {model_to_try}: {e}")
+                    if i < len(self.FALLBACK_MODELS) - 1:
+                        print(f"[Gemini] Falling back to next model...")
+                        continue
+                    else:
+                        print(f"[Gemini] All models exhausted, raising error")
+                        raise Exception(
+                            f"All Gemini models hit rate limits. Last error: {e}. "
+                            "Please wait a moment and try again, or switch to Groq provider."
+                        ) from e
+                else:
+                    # Non-rate-limit error - raise immediately
+                    print(f"[Gemini] Non-rate-limit error on {model_to_try}: {e}")
+                    raise
+        
+        # Should not reach here, but handle edge case
+        if last_error:
+            raise last_error
+        raise Exception("Failed to generate text: no models available")
 
 class GroqModel(LLMInterface):
     def __init__(self, llm_model="groq/compound"):
