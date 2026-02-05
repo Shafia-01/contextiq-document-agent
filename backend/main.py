@@ -90,7 +90,7 @@ async def upload_files(files: List[UploadFile] = File(...)):
 async def ask_question(
     query: str = Form(...),
     model: str = Form("gemini"),
-    top_k: int = Form(10)
+    top_k: int = Form(20)
 ):
     """
     Ask a question over the ingested document corpus.

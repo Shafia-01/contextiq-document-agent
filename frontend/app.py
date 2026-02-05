@@ -46,7 +46,7 @@ def ask_question(query: str, model: str = "groq"):
         data = {
             "query": query,
             "model": model,
-            "top_k": 10
+            "top_k": 20  # retrieve more chunks to improve recall
         }
         
         with st.spinner("Thinking..."):
@@ -72,7 +72,7 @@ def arxiv_search(query: str, model: str = "groq", action: str = "list", max_pape
             "model": model,
             "max_papers": max_papers,
             "action": action,
-            "top_k": 10
+            "top_k": 20
         }
         
         with st.spinner(f"ArXiv {action}ing..."):
