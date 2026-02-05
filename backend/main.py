@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 from pathlib import Path
+import os
 from ingest import extract_documents
 from vectorstore import InMemoryVectorStore
 from qa import QAEngine, GroqModel, GeminiModel, download_pdf  
@@ -36,9 +37,14 @@ UPLOAD_DIR = Path("data/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 vectorstore = InMemoryVectorStore()
-llm_instances = {"groq": GroqModel(), "gemini": GeminiModel()}
 
-qa_engine = QAEngine(vectorstore=vectorstore, llm=llm_instances["groq"])
+# Resolve the default LLM provider once at startup. This keeps Gemini as the
+# default (per assessment requirements) but allows overriding via LLM_PROVIDER.
+DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
+llm_instances = {"groq": GroqModel(), "gemini": GeminiModel()}
+default_llm = llm_instances.get(DEFAULT_PROVIDER, llm_instances["gemini"])
+
+qa_engine = QAEngine(vectorstore=vectorstore, llm=default_llm)
 
 
 def save_uploaded_files(files: List[UploadFile]) -> List[str]:
@@ -83,7 +89,7 @@ async def upload_files(files: List[UploadFile] = File(...)):
 @app.post("/ask")
 async def ask_question(
     query: str = Form(...),
-    model: str = Form("groq"),
+    model: str = Form("gemini"),
     top_k: int = Form(10)
 ):
     """

@@ -278,7 +278,7 @@ def main():
 
         model = st.selectbox(
             "**Select Model**",
-            options=["groq", "gemini"],
+            options=["gemini", "groq"],
             index=0,
             help="**Choose the AI model for answering questions**"
         )

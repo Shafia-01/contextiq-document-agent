@@ -1,7 +1,7 @@
 # ContextIQ
 ## An Enterprise-Ready Document Q&A AI Agent
 
-**ContextIQ** is an end‑to‑end Document Q&A agent that ingests multiple research PDFs, extracts structured content (text, tables, basic metadata), and answers grounded questions over those documents using LLM APIs (Groq or Gemini). It is built as a small but realistic production slice: FastAPI backend, Streamlit UI, local vector store, and optional ArXiv integration for paper discovery.
+**ContextIQ** is an end‑to‑end Document Q&A agent that ingests multiple research PDFs, extracts structured content (text, tables, basic metadata), and answers grounded questions over those documents using LLM APIs (Gemini by default, with Groq as an optional fallback). It is built as a small but realistic production slice: FastAPI backend, Streamlit UI, local vector store, and optional ArXiv integration for paper discovery.
 
 ### 1. Problem Statement & Objective
 
@@ -18,9 +18,9 @@
 - **Backend (`backend/`)**:
   - `main.py` – FastAPI app exposing `/upload`, `/ask`, and `/arxiv_search`.
   - `ingest.py` – PDF‑first ingestion: text, page markers, images, tables, and chunking.
-  - `qa.py` – QA engine, LLM abstraction (Groq/Gemini), ArXiv utilities, and retrieval + answer generation.
+  - `qa.py` – QA engine, LLM abstraction (Gemini/Groq), ArXiv utilities, and retrieval + answer generation.
   - `vectorstore.py` – In‑memory cosine‑similarity vector store.
-  - `llm_client.py` – Thin clients that read **API keys from environment variables** only.
+  - `llm_client.py` – Single entrypoint for LLM clients; reads **API keys from environment variables** only and uses Gemini as the default provider.
 - **Data (`data/`)**: Local storage for uploaded documents and extracted assets (tables/images).
 
 End‑to‑end flow: **Upload → Ingest & Chunk → Embed → Retrieve → Generate Answer + Attribution → Display in UI.**
@@ -42,14 +42,15 @@ End‑to‑end flow: **Upload → Ingest & Chunk → Embed → Retrieve → Gene
     - Retrieval scores and a simple **confidence label** (high/medium/low)
   - Streamlit UI surfaces this alongside the natural‑language answer to reduce hallucination risk.
 - **Security & operations**
-  - API keys are **never hard‑coded**; they are read from env vars (`GROQ_API_KEY`, `GEMINI_API_KEY`).
+  - API keys are **never hard‑coded**; they are read from env vars (`GEMINI_API_KEY`, `GROQ_API_KEY`, optional `LLM_PROVIDER`).
+  - **Default provider**: Gemini. You can override with `LLM_PROVIDER=groq` if needed.
   - In‑memory vector store kept deliberately simple for review; can be swapped for FAISS/Pinecone/Chroma.
 
 ### 4. Quick Start
 
 - **Prerequisites**
   - Python 3.8+
-  - At least one LLM provider key: **Groq** and/or **Gemini**
+  - At least one LLM provider key: **Gemini** (default) and optionally **Groq**
 
 - **Setup**
 
@@ -60,8 +61,9 @@ cd ContextIQ
 pip install -r requirements.txt
 
 # .env (not committed) – example
-export GROQ_API_KEY=your_groq_api_key_here
-export GEMINI_API_KEY=your_gemini_api_key_here
+export GEMINI_API_KEY=your_gemini_api_key_here   # default provider
+export GROQ_API_KEY=your_groq_api_key_here       # optional fallback
+export LLM_PROVIDER=gemini                       # or "groq"
 ```
 
 - **Run backend**

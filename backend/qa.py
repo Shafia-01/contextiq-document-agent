@@ -7,9 +7,9 @@ This module wires together:
 - Retrieval-augmented generation over ingested document chunks.
 
 Non-trivial design choices:
-- Embeddings for Groq-backed flows are computed locally with
-  ``all-mpnet-base-v2`` for speed and privacy; Gemini uses its hosted
-  embedding API.
+- Embeddings for both providers are computed locally with
+  ``all-mpnet-base-v2`` for speed and privacy; this keeps the retrieval layer
+  independent from the choice of generation provider.
 - The QAEngine returns **structured answers** including document-level
   attribution and a simple, explainable confidence heuristic derived from
   cosine similarity scores. This is deliberately transparent so that an
@@ -17,7 +17,7 @@ Non-trivial design choices:
 """
 
 from typing import List, Dict, Any, Tuple
-from llm_client import get_gemini_client, get_groq_client
+from llm_client import get_llm_client
 from ingest import extract_documents
 from sentence_transformers import SentenceTransformer
 import requests
@@ -40,27 +40,41 @@ class LLMInterface:
         raise NotImplementedError
 
 class GeminiModel(LLMInterface):
-    # Note: ``gemini-pro`` is widely available on the v1beta text endpoint used by
-    # the ``google.generativeai`` client. Newer 1.5 models (e.g. ``gemini-1.5-flash``)
-    # can be enabled later once the library / API version is aligned, but using
-    # ``gemini-pro`` here avoids 404s for reviewers running the project.
-    def __init__(self, embedding_model="models/text-embedding-004", llm_model="gemini-pro"):
-        self.genai = get_gemini_client()
-        self.embedding_model = embedding_model
+    """
+    Gemini-backed implementation of the LLM interface.
+
+    We deliberately keep **embeddings local** (SentenceTransformers) so that
+    retrieval behaves the same regardless of whether the generator is Gemini
+    or Groq. Gemini is only responsible for turning retrieved context into
+    natural-language answers.
+
+    Note: The default model id here is set to ``gemini-2.5-flash``, which
+    matches the current Gemini Developer API naming. If your account exposes
+    a different model (e.g. ``gemini-3.0-flash``), you can change this string
+    or introduce an environment variable to override it.
+    """
+
+    def __init__(self, llm_model: str = "gemini-2.5-flash"):
+        # Use the modern google-genai client wired via llm_client.
+        self.client = get_llm_client("gemini")
         self.llm_model = llm_model
 
     def get_embeddings(self, text_list: List[str]) -> List[List[float]]:
-        return [self.genai.embed_content(model=self.embedding_model, content=t)["embedding"] for t in text_list]
+        # Shared local embedding model for all providers; this keeps retrieval
+        # deterministic and avoids coupling to provider-specific embedding APIs.
+        return [embed_model.encode(t).tolist() for t in text_list]
 
     def generate_text(self, prompt: str, system_prompt: str = "") -> str:
-        model = self.genai.GenerativeModel(self.llm_model)
-        chat = model.start_chat(history=[])
-        resp = chat.send_message(f"{system_prompt or 'You are a helpful assistant.'}\n\n{prompt}")
+        content = f"{system_prompt or 'You are a helpful assistant.'}\n\n{prompt}"
+        resp = self.client.models.generate_content(
+            model=self.llm_model,
+            contents=content,
+        )
         return resp.text
 
 class GroqModel(LLMInterface):
     def __init__(self, llm_model="groq/compound"):
-        self.client = get_groq_client()
+        self.client = get_llm_client("groq")
         self.llm_model = llm_model
 
     def get_embeddings(self, text_list: List[str]) -> List[List[float]]:
