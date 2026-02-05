@@ -3,7 +3,7 @@ import requests
 import time
 
 st.set_page_config(
-    page_title="IntelliDoc",
+    page_title="ContextIQ",
     page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -17,6 +17,7 @@ if "uploaded_files" not in st.session_state:
     st.session_state.uploaded_files = []
 if "arxiv_papers" not in st.session_state:
     st.session_state.arxiv_papers = []
+
 
 def upload_documents(files):
     try:
@@ -38,6 +39,7 @@ def upload_documents(files):
         return False, "Could not connect to the API server. Please make sure your FastAPI server is running."
     except Exception as e:
         return False, f"Upload error: {str(e)}"
+
 
 def ask_question(query: str, model: str = "groq"):
     try:
@@ -61,6 +63,7 @@ def ask_question(query: str, model: str = "groq"):
         return False, "Could not connect to the API server. Please make sure your FastAPI server is running."
     except Exception as e:
         return False, f"Error: {str(e)}"
+
 
 def arxiv_search(query: str, model: str = "groq", action: str = "list", max_papers: int = 3):
     try:
@@ -87,6 +90,7 @@ def arxiv_search(query: str, model: str = "groq", action: str = "list", max_pape
     except Exception as e:
         return False, f"Error: {str(e)}"
 
+
 def check_api_health():
     try:
         response = requests.get(f"{API_BASE_URL}/health", timeout=5)
@@ -94,12 +98,75 @@ def check_api_health():
     except:
         return False
 
+
 def display_arxiv_papers(papers):
     for i, paper in enumerate(papers, 1):
         with st.expander(f"📄 Paper {i}: {paper['title'][:100]}..."):
             st.write(f"**Authors:** {', '.join(paper['authors'])}")
             st.write(f"**Summary:** {paper['summary'][:500]}...")
             st.write(f"**PDF URL:** {paper['pdf_url']}")
+
+
+def _format_answer_for_display(answer_payload: dict) -> str:
+    """
+    Turn the structured answer payload from the backend into a readable
+    markdown string for the chat UI.
+
+    The backend always returns:
+    - mode: "combined" | "per_document" | "none"
+    - answer / answers
+    - sources: list of {document_name, source_name, source_path, pages}
+    - confidence: {label, max_score, avg_score, explanation}
+    """
+    if not isinstance(answer_payload, dict):
+        # Fallback – if backend ever returns a plain string.
+        return str(answer_payload)
+
+    mode = answer_payload.get("mode")
+    confidence = answer_payload.get("confidence", {})
+    sources = answer_payload.get("sources", [])
+
+    lines = []
+
+    # Confidence section (lightweight sanity check)
+    label = confidence.get("label")
+    if label:
+        max_score = confidence.get("max_score", 0.0)
+        avg_score = confidence.get("avg_score", 0.0)
+        lines.append(f"**Confidence:** {label} "
+                     f"(max similarity≈{max_score:.2f}, avg≈{avg_score:.2f})")
+        lines.append("")
+
+    if mode == "combined":
+        lines.append("**Answer (combined across documents):**")
+        lines.append(answer_payload.get("answer", "No answer available."))
+    elif mode == "per_document":
+        lines.append("**Answers by document:**")
+        answers = answer_payload.get("answers", {})
+        for doc_id, text in answers.items():
+            lines.append(f"- **{doc_id}**")
+            lines.append(f"  {text}")
+    else:
+        lines.append(answer_payload.get("answer", "No answer available."))
+
+    # Source attribution: where did the answer come from?
+    if sources:
+        lines.append("")
+        lines.append("**Sources used (documents & pages):**")
+        for src in sources:
+            name = src.get("document_name") or src.get("source_name") or "Unknown document"
+            pages = src.get("pages") or []
+            page_str = f"pages {', '.join(str(p) for p in pages)}" if pages else "page information unavailable"
+            lines.append(f"- {name} – {page_str}")
+
+        lines.append("")
+        lines.append(
+            "_Showing document names and approximate pages helps you verify the answer "
+            "against the original PDFs and reduces hallucination risk._"
+        )
+
+    return "\n".join(lines)
+
 
 def main():
     st.markdown("""
@@ -195,8 +262,8 @@ def main():
         </style>
     """, unsafe_allow_html=True)
     
-    st.markdown('<h1 style="font-size:5rem; text-align:center; font-family:Cambria, serif; color:#5E0347;">🤖 IntelliDoc</h1>', unsafe_allow_html=True)
-    st.markdown('<p style="font-size:1.5rem; text-align:center; font-family:Cambria, serif; color:#EB2993;">Ask anything. Know everything!</p>', unsafe_allow_html=True)
+    st.markdown('<h1 style="font-size:5rem; text-align:center; font-family:Cambria, serif; color:#5E0347;">🤖 ContextIQ</h1>', unsafe_allow_html=True)
+    st.markdown('<p style="font-size:1.5rem; text-align:center; font-family:Cambria, serif; color:#EB2993;">Ask smarter. Get grounded answers.</p>', unsafe_allow_html=True)
 
     if not check_api_health():
         st.error(f"**⚠️ Cannot connect to the API server at {API_BASE_URL}**")
@@ -366,7 +433,10 @@ def main():
                     
             elif message["role"] == "assistant":
                 with st.chat_message("assistant"):
-                    st.write(message["content"])
+                    # Assistant messages may now contain structured answers that
+                    # include confidence and source attribution. Render them as
+                    # markdown so recruiters can see document + page grounding.
+                    st.markdown(message["content"])
                     
             elif message["role"] == "system":
                 with st.chat_message("assistant", avatar="📁"):
@@ -394,9 +464,11 @@ def main():
         success, result = ask_question(query, model)
         
         if success:
+            # The backend returns a structured answer payload under "answer".
+            formatted = _format_answer_for_display(result.get("answer", {}))
             st.session_state.messages.append({
                 "role": "assistant",
-                "content": result.get("answer", "No answer available"),
+                "content": formatted,
                 "timestamp": time.time()
             })
         else:

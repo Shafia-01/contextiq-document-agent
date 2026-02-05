@@ -1,4 +1,22 @@
-from typing import List, Dict
+"""
+QA engine and model abstraction for ContextIQ.
+
+This module wires together:
+- A pluggable LLM interface (currently Groq + Gemini)
+- A light-weight in-memory vector store
+- Retrieval-augmented generation over ingested document chunks.
+
+Non-trivial design choices:
+- Embeddings for Groq-backed flows are computed locally with
+  ``all-mpnet-base-v2`` for speed and privacy; Gemini uses its hosted
+  embedding API.
+- The QAEngine returns **structured answers** including document-level
+  attribution and a simple, explainable confidence heuristic derived from
+  cosine similarity scores. This is deliberately transparent so that an
+  enterprise reviewer can see how grounding is computed.
+"""
+
+from typing import List, Dict, Any, Tuple
 from llm_client import get_gemini_client, get_groq_client
 from ingest import extract_documents
 from sentence_transformers import SentenceTransformer
@@ -9,15 +27,24 @@ import arxiv
 
 embed_model = SentenceTransformer("all-mpnet-base-v2")
 
+
 class LLMInterface:
+    """Minimal interface for LLM backends used by the QA engine."""
+
     def get_embeddings(self, text_list: List[str]) -> List[List[float]]:
+        """Return embedding vectors for each input text."""
         raise NotImplementedError
 
     def generate_text(self, prompt: str, system_prompt: str = "") -> str:
+        """Generate a completion for ``prompt`` under an optional system prompt."""
         raise NotImplementedError
 
 class GeminiModel(LLMInterface):
-    def __init__(self, embedding_model="models/text-embedding-004", llm_model="gemini-1.5-flash"):
+    # Note: ``gemini-pro`` is widely available on the v1beta text endpoint used by
+    # the ``google.generativeai`` client. Newer 1.5 models (e.g. ``gemini-1.5-flash``)
+    # can be enabled later once the library / API version is aligned, but using
+    # ``gemini-pro`` here avoids 404s for reviewers running the project.
+    def __init__(self, embedding_model="models/text-embedding-004", llm_model="gemini-pro"):
         self.genai = get_gemini_client()
         self.embedding_model = embedding_model
         self.llm_model = llm_model
@@ -77,6 +104,15 @@ class QAEngine:
         self.llm = llm
 
     def add_documents(self, chunks: List[Dict]):
+        """
+        Add already-chunked documents to the vector store.
+
+        Each chunk is embedded once and stored along with its metadata.
+        Metadata is expected to contain:
+        - ``document_name`` / ``title`` – human-readable identifier
+        - ``source_name`` / ``source_path`` – original file reference
+        - ``page`` – (optional) page number for PDFs, inferred at ingestion time.
+        """
         texts = [c["text"] for c in chunks]
         embeddings = self.llm.get_embeddings(texts)
         for c, vec in zip(chunks, embeddings):
@@ -84,57 +120,176 @@ class QAEngine:
             self.vs.add(vec, {"text": c["text"], "metadata": meta}, id=c["id"])
         print(f"[QA] Added {len(chunks)} chunks to vectorstore.")
         
-        doc_names = set()
-        for c in chunks:
-            doc_name = c.get("meta", {}).get("document_name", "unknown")
-            doc_names.add(doc_name)
+        doc_names = {c.get("meta", {}).get("document_name", "unknown") for c in chunks}
         print(f"[QA] Document names stored: {list(doc_names)}")
     
+    def _compute_confidence(self, scores: List[float]) -> Dict[str, Any]:
+        """
+        Convert raw similarity scores into a simple, explainable confidence label.
+
+        - High: strong and consistent similarity across retrieved chunks
+        - Medium: mixed evidence
+        - Low: weak grounding; answers are more likely to drift or hallucinate.
+        """
+        if not scores:
+            return {
+                "label": "low",
+                "max_score": 0.0,
+                "avg_score": 0.0,
+                "explanation": "No supporting chunks retrieved; answer is likely ungrounded.",
+            }
+
+        max_score = max(scores)
+        avg_score = sum(scores) / len(scores)
+
+        if max_score > 0.85 and avg_score > 0.65:
+            label = "high"
+        elif max_score > 0.6 and avg_score > 0.4:
+            label = "medium"
+        else:
+            label = "low"
+
+        return {
+            "label": label,
+            "max_score": max_score,
+            "avg_score": avg_score,
+            "explanation": (
+                "Derived from cosine similarity between the question and retrieved chunks. "
+                "Higher scores mean the answer is better grounded in the source documents."
+            ),
+        }
+
+    def _group_retrieved_by_document(self, retrieved: List[Dict]) -> Tuple[Dict[str, List[Dict]], Dict[str, Dict]]:
+        """
+        Group retrieved chunks by document for attribution and per-document QA.
+
+        Returns:
+        - mapping from document id/name → list of chunk dicts with text, score, and metadata
+        - mapping from document id/name → stable source metadata (name, path, pages used)
+        """
+        grouped: Dict[str, List[Dict]] = {}
+        sources: Dict[str, Dict] = {}
+
+        for r in retrieved:
+            payload = r["metadata"]
+            text = payload.get("text", "")
+            meta = payload.get("metadata", {})  # metadata stored by vectorstore.add
+
+            doc_id = (
+                meta.get("document_name")
+                or meta.get("title")
+                or meta.get("source_name")
+                or "unknown_doc"
+            )
+
+            chunk_info = {
+                "text": text,
+                "score": r.get("score", 0.0),
+                "page": meta.get("page"),
+                "source_name": meta.get("source_name"),
+                "document_name": meta.get("document_name") or meta.get("title") or meta.get("source_name"),
+                "source_path": meta.get("source_path"),
+            }
+
+            print(f"[DEBUG] Retrieved chunk from: '{doc_id}' (page={chunk_info['page']}, score={chunk_info['score']:.3f})")
+            grouped.setdefault(doc_id, []).append(chunk_info)
+
+            # Maintain a compact, document-level source description.
+            if doc_id not in sources:
+                sources[doc_id] = {
+                    "document_name": chunk_info["document_name"] or doc_id,
+                    "source_name": chunk_info["source_name"],
+                    "source_path": chunk_info["source_path"],
+                    "pages": set(),  # we convert to list later for JSON
+                }
+            if chunk_info["page"] is not None:
+                sources[doc_id]["pages"].add(chunk_info["page"])
+
+        # Normalise page sets into sorted lists for JSON serialisation.
+        for doc_id, src in sources.items():
+            src["pages"] = sorted(src["pages"]) if src["pages"] else []
+
+        return grouped, sources
+
     def ask(self, query: str, top_k: int = 10) -> Dict:
+        """
+        Answer a user query using retrieval-augmented generation.
+
+        Returns a structured payload with:
+        - mode: "combined" | "per_document"
+        - answer / answers: natural-language answer(s) from the LLM
+        - sources: document-level attribution (names, paths, pages)
+        - confidence: lightweight similarity-based confidence heuristic.
+        """
         print(f"[QA] User query: {query}")
         query_vec = self.llm.get_embeddings([query])[0]
         retrieved = self.vs.similarity_search(query_vec, top_k=top_k)
 
-        docs_dict = {}
-        for r in retrieved:
-            metadata = r["metadata"].get("metadata", {})  
-            doc_id = (metadata.get("document_name") or 
-                     metadata.get("title") or 
-                     metadata.get("source_name") or 
-                     "unknown_doc")
-            
-            print(f"[DEBUG] Retrieved chunk from: '{doc_id}'")  # Debug output
-            docs_dict.setdefault(doc_id, []).append(r["metadata"]["text"])
+        if not retrieved:
+            print("[QA] No chunks retrieved for query; returning fallback message.")
+            return {
+                "mode": "none",
+                "answer": "I could not find any relevant content in the ingested documents for this question.",
+                "sources": [],
+                "confidence": {
+                    "label": "low",
+                    "max_score": 0.0,
+                    "avg_score": 0.0,
+                    "explanation": "No supporting chunks retrieved; answer is likely ungrounded.",
+                },
+            }
 
-        print(f"[QA] Retrieved content from {len(docs_dict)} documents: {list(docs_dict.keys())}")
+        grouped_chunks, source_meta = self._group_retrieved_by_document(retrieved)
+        print(f"[QA] Retrieved content from {len(grouped_chunks)} documents: {list(grouped_chunks.keys())}")
 
-        if any(keyword in query.lower() for keyword in ["these papers", "all papers", "combined", "together"]):
-            all_text = "\n\n".join([text for texts in docs_dict.values() for text in texts])
-            prompt = f"""Answer the following question using all provided context from multiple documents.
+        scores = [c["score"] for chunks in grouped_chunks.values() for c in chunks]
+        confidence = self._compute_confidence(scores)
+
+        is_combined = any(
+            keyword in query.lower() for keyword in ["these papers", "all papers", "combined", "together"]
+        )
+
+        if is_combined:
+            # Multi-document combined analysis.
+            all_text = "\n\n".join([c["text"] for chunks in grouped_chunks.values() for c in chunks])
+            prompt = f"""You are a research assistant answering questions over multiple documents.
+Use ONLY the provided context and do not invent facts that are not supported by it.
 
 Context:
 {all_text}
 
 Question: {query}
-Answer:
+Answer (be concise but specific):
 """
             answer = self.llm.generate_text(prompt)
-            return {"answer": answer, "sources": list(docs_dict.keys())}
-        else:
-            answers = {}
-            for doc_id, texts in docs_dict.items():
-                doc_text = "\n\n".join(texts)
-                prompt = f"""Answer the following question using ONLY the provided context from this document.
+            return {
+                "mode": "combined",
+                "answer": answer,
+                "sources": list(source_meta.values()),
+                "confidence": confidence,
+            }
+
+        # Per-document answers: one answer per document.
+        answers: Dict[str, str] = {}
+        for doc_id, chunks in grouped_chunks.items():
+            doc_text = "\n\n".join(c["text"] for c in chunks)
+            prompt = f"""You are a research assistant answering questions about a single document.
+Use ONLY the provided context from this document; if the answer is not present, say so explicitly.
 
 Context:
 {doc_text}
 
 Question: {query}
-Answer:
+Answer (be concise but specific):
 """
-                answer = self.llm.generate_text(prompt)
-                answers[doc_id] = answer
-            return {"answers": answers, "sources": list(docs_dict.keys())}
+            answers[doc_id] = self.llm.generate_text(prompt)
+
+        return {
+            "mode": "per_document",
+            "answers": answers,
+            "sources": list(source_meta.values()),
+            "confidence": confidence,
+        }
 
     def search_and_list_arxiv(self, query: str, max_papers: int = 5) -> List[Dict]:
         papers = search_arxiv(query, max_results=max_papers)

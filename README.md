@@ -1,185 +1,134 @@
-# IntelliDoc - Intelligent Document Q&A Agent
+# ContextIQ
+## An Enterprise-Ready Document Q&A AI Agent
 
-🤖 This is a powerful AI-powered document question-answering system that allows you to upload documents and ask intelligent questions about their content. Built with FastAPI backend and Streamlit frontend, it supports multiple AI models and integrates with ArXiv for research paper ingestion.
+**ContextIQ** is an end‑to‑end Document Q&A agent that ingests multiple research PDFs, extracts structured content (text, tables, basic metadata), and answers grounded questions over those documents using LLM APIs (Groq or Gemini). It is built as a small but realistic production slice: FastAPI backend, Streamlit UI, local vector store, and optional ArXiv integration for paper discovery.
 
-## ✨ Features
+### 1. Problem Statement & Objective
 
-### 📁 Document Processing
-- **Multi-format Support**: PDF, DOCX, HTML, TXT, MD files
-- **Smart Extraction**: Text, tables, images, and metadata extraction
-- **Intelligent Chunking**: Optimized text segmentation with overlap
-- **Document Naming**: Automatic title extraction from content and metadata
+- **Problem**: Enterprise teams sit on large collections of PDFs and research reports that are hard to search and reason over. Copy‑pasting into a chat model leads to context loss, no source attribution, and high risk of hallucinations.
+- **Objective**: Provide a **grounded, auditable Q&A agent** that:
+  - Ingests multiple PDFs and related documents
+  - Preserves **page‑level context** and document metadata
+  - Answers questions, summarizes content, and surfaces key metrics
+  - Always shows **where** the answer came from (document + page)
 
-### 🤖 AI Models
-- **Groq Integration**: Fast inference with local embeddings
-- **Google Gemini**: Advanced reasoning capabilities
-- **Flexible Switching**: Change models on-the-fly
-- **Local Embeddings**: SentenceTransformers for vector similarity
+### 2. Architecture Overview
 
-### 🔍 ArXiv Integration
-- **Paper Search**: Find relevant research papers
-- **Batch Operations**: List, download, and ingest papers
-- **Research Assistant**: Combine uploaded docs with research papers
+- **Frontend (`frontend/app.py`)**: Streamlit chat UI for uploading documents, running ArXiv searches, and interacting with the Q&A agent.
+- **Backend (`backend/`)**:
+  - `main.py` – FastAPI app exposing `/upload`, `/ask`, and `/arxiv_search`.
+  - `ingest.py` – PDF‑first ingestion: text, page markers, images, tables, and chunking.
+  - `qa.py` – QA engine, LLM abstraction (Groq/Gemini), ArXiv utilities, and retrieval + answer generation.
+  - `vectorstore.py` – In‑memory cosine‑similarity vector store.
+  - `llm_client.py` – Thin clients that read **API keys from environment variables** only.
+- **Data (`data/`)**: Local storage for uploaded documents and extracted assets (tables/images).
 
-### 💬 Interactive Interface
-- **Streamlit Frontend**: User-friendly web interface
-- **Real-time Chat**: Interactive Q&A with your documents
-- **Multi-source Answers**: Per-document or combined responses
-- **Session Management**: Persistent chat history and file tracking
+End‑to‑end flow: **Upload → Ingest & Chunk → Embed → Retrieve → Generate Answer + Attribution → Display in UI.**
 
-## 🏗️ Project Structure
+### 3. Enterprise‑Aligned Feature Map
 
-```
-IntelliDoc/
-├── backend/                # FastAPI backend services
-│   ├── main.py             # API endpoints and server setup
-│   ├── ingest.py           # Document processing pipeline
-│   ├── qa.py               # Q&A engine with LLM integration
-│   ├── llm_client.py       # AI model client factory
-│   └── vectorstore.py      # In-memory vector storage
-├── frontend/
-│   └── app.py              # Streamlit web interface
-├── data/                   # Document storage and processing
-└── requirements.txt        # Python dependencies
-```
+- **Document ingestion**
+  - PDF‑optimized pipeline using `fitz` and `pdfplumber`
+  - Page‑level markers (`[PAGE n]`) preserved to recover **page numbers per chunk**
+  - Extraction of text, basic metadata, tables (CSV) and images (for audit/debug)
+- **Retrieval & QA**
+  - SentenceTransformers (`all-mpnet-base-v2`) for local embeddings (Groq path)
+  - Configurable chunk size and overlap (defaults: **1500 chars / 200‑char overlap**) to balance context and recall
+  - Supports **per‑document** answers and **combined, cross‑document** analysis
+- **Source attribution & grounding**
+  - For each answer, backend returns:
+    - Document name/title
+    - Approximate **page number** for supporting chunks
+    - Retrieval scores and a simple **confidence label** (high/medium/low)
+  - Streamlit UI surfaces this alongside the natural‑language answer to reduce hallucination risk.
+- **Security & operations**
+  - API keys are **never hard‑coded**; they are read from env vars (`GROQ_API_KEY`, `GEMINI_API_KEY`).
+  - In‑memory vector store kept deliberately simple for review; can be swapped for FAISS/Pinecone/Chroma.
 
-## 🚀 Quick Start
+### 4. Quick Start
 
-### Prerequisites
-- Python 3.8+
-- API keys for AI models (Groq and/or Gemini)
+- **Prerequisites**
+  - Python 3.8+
+  - At least one LLM provider key: **Groq** and/or **Gemini**
 
-### Installation
+- **Setup**
 
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd "Docu Agent"
-   ```
-
-2. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Set up environment variables**
-   Create a `.env` file in the project root:
-   ```bash
-   # Required: At least one AI model API key
-   GROQ_API_KEY=your_groq_api_key_here
-   GEMINI_API_KEY=your_gemini_api_key_here
-   ```
-
-4. **Start the backend server**
-   ```bash
-   cd backend
-   uvicorn main:app --reload --host 0.0.0.0 --port 8000
-   ```
-
-5. **Start the frontend** (in a new terminal)
-   ```bash
-   cd frontend
-   streamlit run app.py --server.port 8501
-   ```
-
-6. **Access the application**
-   - Frontend: http://localhost:8501
-   - API Docs: http://localhost:8000/docs
-
-## 📖 Usage Guide
-
-### Document Upload
-1. **Upload Files**: Use the sidebar to upload PDF, DOCX, or text files
-2. **Automatic Processing**: Documents are chunked and added to the knowledge base
-3. **Smart Naming**: Document titles are extracted automatically
-
-### ArXiv Research
-1. **Search Papers**: Enter keywords to find relevant research papers
-2. **Preview Results**: List papers to see titles, authors, and summaries
-3. **Download**: Save papers locally for offline reading
-4. **Ingest**: Add papers to the knowledge base for Q&A
-
-### Asking Questions
-1. **Simple Questions**: Ask about specific documents
-2. **Combined Analysis**: Use keywords like "all papers" or "combined" for multi-document answers
-3. **Model Selection**: Choose between Groq (faster) or Gemini (more advanced)
-
-## 🔧 API Endpoints
-
-### Core Endpoints
-- `GET /health` - Health check
-- `POST /upload` - Upload multiple documents
-- `POST /ask` - Ask questions about documents
-- `POST /arxiv_search` - Search and manage ArXiv papers
-
-### Example API Usage
 ```bash
-# Upload documents
-curl -X POST "http://localhost:8000/upload" \
-  -F "files=@document.pdf"
+git clone <your-repo-url>
+cd ContextIQ
 
-# Ask a question
-curl -X POST "http://localhost:8000/ask" \
-  -F "query=What is the main topic of this document?" \
-  -F "model=groq" \
-  -F "top_k=10"
+pip install -r requirements.txt
 
-# Search ArXiv papers
-curl -X POST "http://localhost:8000/arxiv_search" \
-  -F "query=machine learning transformers" \
-  -F "action=list" \
-  -F "max_papers=5"
+# .env (not committed) – example
+export GROQ_API_KEY=your_groq_api_key_here
+export GEMINI_API_KEY=your_gemini_api_key_here
 ```
 
-## 🛠️ Configuration
+- **Run backend**
 
-### AI Models
-- **Groq**: Fast inference, local embeddings with SentenceTransformers
-- **Gemini**: Advanced reasoning, cloud-based embeddings
-- **Custom Models**: Extend `llm_client.py` to add more providers
+```bash
+cd backend
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
 
-### Document Processing
-- **Chunk Size**: 1500 characters with 200-character overlap
-- **Max Chunks**: 500 per document (safety limit)
-- **Supported Formats**: PDF, DOCX, HTML, TXT, MD
+- **Run frontend**
 
-### Vector Storage
-- **In-Memory**: Fast local storage using NumPy
-- **Production**: Easily swap for FAISS, Pinecone, or Chroma
+```bash
+cd ../frontend
+streamlit run app.py --server.port 8501
+```
 
-## 🔍 Advanced Features
+- **Access**
+  - UI: `http://localhost:8501`
+  - API docs: `http://localhost:8000/docs`
 
-### Multi-Document Analysis
-- **Per-Document Answers**: Get answers specific to each document
-- **Combined Analysis**: Merge insights from multiple sources
-- **Source Attribution**: See which documents contributed to answers
+### 5. Example Run (Happy Path)
 
-### Research Integration
-- **ArXiv Search**: Find papers by keywords, authors, or topics
-- **Batch Processing**: Download and ingest multiple papers at once
-- **Metadata Extraction**: Automatic paper title and author detection
+1. **Upload documents**
+   - In the sidebar, upload several research PDFs (e.g. transformer papers).
+   - Backend extracts text + tables, chunks into overlapping spans, and populates the vector store.
+2. **Ask questions**
+   - Example queries:
+     - *“What is the main research question of each paper?”*
+     - *“Across all papers, summarize how evaluation metrics are defined.”*
+     - *“On which page do they report BLEU and ROUGE scores?”*
+3. **Expected output (simplified)**
+   - Natural‑language answer, e.g.:
+     - *“Paper A studies vocabulary growth in large LMs; Paper B proposes a new metric for …”*
+   - Plus **attribution section**, e.g.:
+     - `Paper A (2509.00516v1.pdf) – pages 3–4 (high similarity)`
+     - `Paper B (571e56b308aeaced7889e0bd.pdf) – page 7 (medium similarity)`
+   - Confidence label: `confidence: medium (max similarity≈0.83, avg≈0.55)`.
 
-### Smart Document Handling
-- **Title Extraction**: Intelligent document naming from content
-- **Table Processing**: CSV export of PDF tables
-- **Image Extraction**: Save images from PDFs for reference
+You can also hit the API directly via `/upload`, `/ask`, and `/arxiv_search` using `curl` or Postman.
 
-## 🐛 Troubleshooting
+### 6. PDF Ingestion & Edge Cases
 
-### Common Issues
-1. **API Connection Error**: Ensure the FastAPI server is running on port 8000
-2. **Missing API Keys**: Check your `.env` file has valid API keys
-3. **Document Processing**: Large PDFs may take time to process
-4. **Memory Usage**: In-memory storage grows with document count
+- **Text extraction**
+  - Uses `fitz` to iterate pages; each page is logged and wrapped with a `[PAGE n]` marker so later chunks can be mapped back to pages.
+  - `pdfplumber` is used opportunistically to extract tables per page to CSV.
+- **Chunking strategy**
+  - Greedy character‑based chunks of ~1500 chars with 200‑char overlap.
+  - This size is chosen to:
+    - Fit comfortably within LLM context windows
+    - Preserve enough local context for section‑level questions
+    - Avoid exploding the number of embeddings for large documents
+- **Edge‑case handling (by design)**
+  - **Very large PDFs**: chunking is capped via `max_chunks` (default 500) to prevent unbounded memory growth.
+  - **Scanned/broken PDFs**: pages with very low text content are logged; behavior is to ingest what’s available and surface the limitation in logs (a realistic place to plug in OCR later).
+  - **Empty pages**: explicitly detected and skipped in effective context while keeping page numbering consistent.
 
-### Performance Tips
-- Use Groq for faster responses
-- Limit document chunk count for large files
-- Clear chat history periodically to free memory
+### 7. Evaluation & Sanity Checks
 
-## 📄 License
+This project includes a **lightweight, explainable evaluation heuristic** rather than a heavy benchmark:
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+- During retrieval, each chunk receives a cosine similarity score to the query.
+- The QA engine computes:
+  - `max_score` and `avg_score` across retrieved chunks
+  - A human‑friendly **confidence label**:
+    - High: strong, consistent similarity
+    - Medium: mixed evidence
+    - Low: weak grounding – likely to contain hallucinations or off‑topic content
+- Both the UI and API surface this label and the supporting documents/pages used.
 
-
-***Ask anything. Know everything.***
+This mirrors how an enterprise system might surface “answer quality” without hiding the underlying retrieval evidence.
