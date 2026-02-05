@@ -225,9 +225,15 @@ class QAEngine:
 
         return grouped, sources
 
-    def ask(self, query: str, top_k: int = 10) -> Dict:
+    def ask(self, query: str, top_k: int = 10, target_document: str = None) -> Dict:
         """
         Answer a user query using retrieval-augmented generation.
+
+        Args:
+            query: User's question
+            top_k: Number of chunks to retrieve
+            target_document: Optional filename to filter retrieval to only this document.
+                           Used when user asks about "paper 1" or "paper 2".
 
         Returns a structured payload with:
         - mode: "combined" | "per_document"
@@ -236,8 +242,25 @@ class QAEngine:
         - confidence: lightweight similarity-based confidence heuristic.
         """
         print(f"[QA] User query: {query}")
+        if target_document:
+            print(f"[QA] Filtering retrieval to document: {target_document}")
         query_vec = self.llm.get_embeddings([query])[0]
         retrieved = self.vs.similarity_search(query_vec, top_k=top_k)
+        
+        # Filter to target document if specified (e.g., when user asks about "paper 1")
+        if target_document:
+            filtered = []
+            for r in retrieved:
+                meta = r.get("metadata", {}).get("metadata", {})
+                source_name = meta.get("source_name") or meta.get("source_path", "")
+                # Match by filename (handle both full path and just filename)
+                if target_document in source_name or source_name.endswith(target_document):
+                    filtered.append(r)
+            if filtered:
+                retrieved = filtered
+                print(f"[QA] Filtered to {len(filtered)} chunks from target document")
+            else:
+                print(f"[QA] Warning: No chunks found for target document '{target_document}'")
 
         if not retrieved:
             print("[QA] No chunks retrieved for query; returning fallback message.")

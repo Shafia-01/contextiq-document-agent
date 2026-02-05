@@ -42,13 +42,16 @@ def upload_documents(files):
         return False, f"Upload error: {str(e)}"
 
 
-def ask_question(query: str, model: str = "groq"):
+def ask_question(query: str, model: str = "groq", target_document: str = None):
     try:
         data = {
             "query": query,
             "model": model,
             "top_k": 20  # retrieve more chunks to improve recall
         }
+        # Add target_document filter if specified
+        if target_document:
+            data["target_document"] = target_document
         
         with st.spinner("Thinking..."):
             response = requests.post(f"{API_BASE_URL}/ask", data=data)
@@ -205,27 +208,32 @@ def _format_answer_for_display(answer_payload: dict) -> str:
     return "\n".join(lines)
 
 
-def _rewrite_query_with_paper_indices(query: str) -> str:
+def _extract_target_paper_from_query(query: str) -> tuple[str, str]:
     """
-    Interpret 'paper 1', 'paper 2', ... as references to the uploaded
-    documents in order, and rewrite the query to use the actual filenames.
-
-    Example:
-        'What is the conclusion of paper 1?' ->
-        'What is the conclusion of 2509.09680v1.pdf?'
+    Detect if the query mentions 'paper 1', 'paper 2', etc., and return
+    both the rewritten query and the target filename for filtering.
+    
+    Returns:
+        (rewritten_query, target_filename) where target_filename is None
+        if no specific paper is mentioned.
     """
     uploaded = st.session_state.get("uploaded_files", [])
     if not uploaded:
-        return query
-
+        return query, None
+    
+    target_filename = None
+    
     def replacer(match: re.Match) -> str:
+        nonlocal target_filename
         idx = int(match.group(1)) - 1
         if 0 <= idx < len(uploaded):
             filename = uploaded[idx].get("name", f"paper {match.group(1)}")
+            target_filename = filename  # Capture for filtering
             return filename
         return match.group(0)
-
-    return re.sub(r"paper\s+(\d+)", replacer, query, flags=re.IGNORECASE)
+    
+    rewritten = re.sub(r"paper\s+(\d+)", replacer, query, flags=re.IGNORECASE)
+    return rewritten, target_filename
 
 
 def main():
@@ -515,7 +523,7 @@ def main():
             st.error("**❌ Please upload documents or search/ingest ArXiv papers first to ask questions**")
             return
         
-        rewritten_query = _rewrite_query_with_paper_indices(query)
+        rewritten_query, target_filename = _extract_target_paper_from_query(query)
 
         st.session_state.messages.append({
             "role": "user",
@@ -523,7 +531,7 @@ def main():
             "timestamp": time.time()
         })
         
-        success, result = ask_question(rewritten_query, model)
+        success, result = ask_question(rewritten_query, model, target_document=target_filename)
         
         if success:
             # The backend returns a structured answer payload under "answer".

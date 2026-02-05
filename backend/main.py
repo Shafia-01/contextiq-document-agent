@@ -93,13 +93,15 @@ async def upload_files(files: List[UploadFile] = File(...)):
 async def ask_question(
     query: str = Form(...),
     model: str = Form("gemini"),
-    top_k: int = Form(20)
+    top_k: int = Form(20),
+    target_document: str = Form(None)
 ):
     """
     Ask a question over the ingested document corpus.
 
     - ``model`` chooses the underlying LLM provider (Groq or Gemini).
     - ``top_k`` controls how many chunks are retrieved from the vector store.
+    - ``target_document`` (optional) filters retrieval to only chunks from this filename.
     """
     try:
         if model not in llm_instances:
@@ -110,7 +112,7 @@ async def ask_question(
         # Switch LLM implementation for this request; the vector store and
         # metadata remain unchanged.
         qa_engine.llm = llm_instances[model]
-        answer = qa_engine.ask(query, top_k=top_k)
+        answer = qa_engine.ask(query, top_k=top_k, target_document=target_document)
         return {"query": query, "answer": answer}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
