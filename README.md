@@ -55,7 +55,7 @@ End‑to‑end flow: **Upload → Ingest & Chunk → Embed → Retrieve → Gene
 - **Setup**
 
 ```bash
-git clone <https://github.com/Shafia-01/contextiq-document-agent>
+git clone https://github.com/Shafia-01/contextiq-document-agent
 cd ContextIQ
 
 pip install -r requirements.txt
@@ -134,3 +134,5 @@ This project includes a **lightweight, explainable evaluation heuristic** rather
 - Both the UI and API surface this label and the supporting documents/pages used.
 
 This mirrors how an enterprise system might surface “answer quality” without hiding the underlying retrieval evidence.
+
+## 🔗 [Live Demo](https://example.com)
