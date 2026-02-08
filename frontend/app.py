@@ -315,7 +315,23 @@ def main():
                 padding: 0.4rem !important;
                 text-align: center !important;
             }
+            /* Remove typing/caret indicator from select (e.g. Select Model dropdown) */
+            select {
+                caret-color: transparent !important;
+                outline: none !important;
+            }
+            select:focus {
+                outline: none !important;
+            }
             
+            /* Tighter spacing between LIST / DOWNLOAD / INGEST buttons */
+            [data-testid="column"] + [data-testid="column"] {
+                padding-left: 0.25rem !important;
+            }
+            section[data-testid="stSidebar"] [data-testid="column"] {
+                padding-left: 0.25rem !important;
+                padding-right: 0.25rem !important;
+            }
             /* Sidebar divider styling */
             section[data-testid="stSidebar"] hr {
                 border-top: 3px solid #5E0347 !important;  /* Thickness + color */
@@ -330,8 +346,13 @@ def main():
         </style>
     """, unsafe_allow_html=True)
     
-    st.markdown('<h1 style="font-size:5rem; text-align:center; font-family:Cambria, serif; color:#5E0347;">🤖 ContextIQ</h1>', unsafe_allow_html=True)
-    st.markdown('<p style="font-size:1.5rem; text-align:center; font-family:Cambria, serif; color:#EB2993;">Ask smarter. Get grounded answers.</p>', unsafe_allow_html=True)
+    st.markdown(
+        '<div style="line-height:1.2;">'
+        '<h1 style="font-size:5rem; text-align:center; font-family:Cambria, serif; color:#5E0347; margin-bottom:-5;">🤖 ContextIQ</h1>'
+        '<p style="font-size:1.5rem; text-align:center; font-family:Cambria, serif; color:#EB2993; margin-top:0.1rem;">Ask smarter. Get grounded answers.</p>'
+        '</div>',
+        unsafe_allow_html=True
+    )
 
     if not check_api_health():
         st.error(f"**⚠️ Cannot connect to the API server at {API_BASE_URL}**")
@@ -369,14 +390,14 @@ def main():
                 help="**Maximum number of papers to find**"
             )
             
-            action_col1, action_col2, action_col3 = st.columns(3)
+            action_col1, action_col2, action_col3 = st.columns(3, gap="small")
             
             with action_col1:
                 list_papers = st.form_submit_button("**📋 LIST**", type="secondary")
             with action_col2:
                 download_papers = st.form_submit_button("**⬇️ DOWNLOAD**", type="secondary")
             with action_col3:
-                ingest_papers = st.form_submit_button("**📚 INGEST**", type="primary")
+                ingest_papers = st.form_submit_button("**📚 INGEST**", type="secondary")
 
         if list_papers and arxiv_query:
             success, result = arxiv_search(arxiv_query, model, "list", max_papers)
