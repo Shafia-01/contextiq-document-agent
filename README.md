@@ -55,7 +55,7 @@ End‑to‑end flow: **Upload → Ingest & Chunk → Embed → Retrieve → Gene
 - **Setup**
 
 ```bash
-git clone <your-repo-url>
+git clone <https://github.com/Shafia-01/contextiq-document-agent>
 cd ContextIQ
 
 pip install -r requirements.txt
